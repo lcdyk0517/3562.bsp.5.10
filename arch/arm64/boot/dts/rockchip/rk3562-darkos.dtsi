@@ -24,6 +24,9 @@
 		io-channel-names = "buttons";
 		keyup-threshold-microvolt = <1800000>;
 		poll-interval = <100>;
+		/* 音量键长按自动重复 (arkos4clone 4.4 同款; 5.10 adc-keys.c
+		 * 原生支持该属性, EV_REP 走 input 核心默认 500ms/33ms 节奏) */
+		autorepeat;
 
 		vol-up-key {
 			linux,code = <KEY_VOLUMEUP>;
@@ -259,7 +262,7 @@
 		enable-active-high;
 	};
 
-	wireless-wlan {
+	wireless_wlan: wireless-wlan {
 		compatible = "wlan-platdata";
 		rockchip,grf = <&sys_grf>;
 		/* Rev A is RK915, rev B is AIC8800D80. rfkill is the only consumer
@@ -279,7 +282,7 @@
 		status = "disabled";
 	};
 
-	charge-animation {
+	charge_anim: charge-animation {
 		compatible = "rockchip,uboot-charge";
 		rockchip,uboot-charge-on = <1>;
 		rockchip,android-charge-on = <0>;
@@ -515,6 +518,11 @@
 
 &route_dsi {
 	status = "okay";
+	/* dArkOS: names the U-Boot / kernel boot logos live under in the resource image. */
+	logo,uboot = "logo.bmp";
+	logo,kernel = "logo_kernel.bmp";
+	logo,mode = "fullscreen";
+	charge_logo,mode = "center";
 };
 
 &route_rgb {
@@ -779,8 +787,8 @@
 	buttons {
 		/*
 		 * All 10 button GPIOs are listed here (RG52 Mini has 10,
-		 * RG43H Pro has 9).  The joystick driver node is per-device
-		 * and references only the pins it needs via key-gpios.
+		 * RG43H Pro has 9).  The joystick driver node is per-device;
+		 * each button child node carries its own gpios property.
 		 */
 		gpio_key_pin: gpio-key-pin {
 			rockchip,pins =
@@ -796,10 +804,15 @@
 				<0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
+		/* 主马达 GPIO3_A7 (各机型共用). 副马达/风扇轨脚位因板而异:
+		 * - rg52mini/rg43h: 副马达 GPIO3_B0 -> moto_r_gpio (各自 dts)
+		 * - ais: GPIO3_B0 是 fan_vcc 使能, 独占, 不进 moto 组
+		 * - ngp45ht: 单马达 GPIO0_B7 -> ngp_moto_gpio
+		 * 偏置用 pull_none (原厂同款): pull_up 会在 probe 前把
+		 * ACTIVE_HIGH 马达脚抬高 -> 上电常震. */
 		moto_gpio: moto-gpio {
 			rockchip,pins =
-				<3 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>,
-				<3 RK_PB0 RK_FUNC_GPIO &pcfg_pull_up>;
+				<3 RK_PA7 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };

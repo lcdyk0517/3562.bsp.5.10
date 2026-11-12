@@ -7,7 +7,7 @@ struct msg_buf *intf_tcp_alloc_msg(struct msg_buf *msg)
 {
 	//printk("%s \n",__func__);
 	int len=sizeof(struct msg_buf) ;
-	msg = kzalloc(len , /*GFP_KERNEL*/GFP_ATOMIC);
+	msg = kzalloc(len , GFP_ATOMIC);
 	if(!msg)
 		printk("%s: alloc failed \n", __func__);
 	memset(msg,0,len);
@@ -66,7 +66,7 @@ void tcp_ack_init(struct rwnx_hw *priv)
 	struct tcp_ack_info *ack_info;
 	struct tcp_ack_manage *ack_m = &priv->ack_m;
 
-	printk("%s \n",__func__);
+	printk("========== tcp ack debug %s \n",__func__);
 	memset(ack_m, 0, sizeof(struct tcp_ack_manage));
 	ack_m->priv = priv;
 	spin_lock_init(&ack_m->lock);
@@ -540,7 +540,7 @@ int filter_send_tcp_ack(struct rwnx_hw *priv,
 			       struct msg_buf *msgbuf,
 			       unsigned char *buf, unsigned int plen)
 {
-	//printk("%s \n",__func__);
+//	printk("%s \n",__func__);
 	int ret = 0;
 	int index, drop;
 	unsigned short win_scale = 0;
@@ -552,7 +552,7 @@ int filter_send_tcp_ack(struct rwnx_hw *priv,
 
 	tcp_ack_update(ack_m);
 	drop = tcp_check_ack(buf, &ack_msg, &win_scale);
-	//printk("drop:%d win_scale:%d",drop,win_scale);
+//	printk("drop:%d win_scale:%d",drop,win_scale);
 	if (!drop && (0 == win_scale))
 		return 0;
 

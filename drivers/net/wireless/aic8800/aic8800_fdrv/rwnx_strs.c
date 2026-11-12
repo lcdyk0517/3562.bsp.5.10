@@ -11,6 +11,7 @@
  */
 
 #include "lmac_msg.h"
+
 static const char *const rwnx_mmid2str[MSG_I(MM_MAX)] = {
     [MSG_I(MM_RESET_REQ)]                 = "MM_RESET_REQ",
     [MSG_I(MM_RESET_CFM)]                 = "MM_RESET_CFM",
@@ -125,8 +126,8 @@ static const char *const rwnx_mmid2str[MSG_I(MM_MAX)] = {
     [MSG_I(MM_SET_STACK_START_REQ)] = "MM_SET_STACK_START_REQ",
     [MSG_I(MM_SET_STACK_START_CFM)] = "MM_SET_STACK_START_CFM",
     [MSG_I(MM_APM_STALOSS_IND)]     = "MM_APM_STALOSS_IND",
-    [MSG_I(MM_SET_VENDOR_HWCONFIG_REQ)] = "MM_SET_VENDOR_HWCONFIG_REQ",
-    [MSG_I(MM_SET_VENDOR_HWCONFIG_CFM)] = "MM_SET_VENDOR_HWCONFIG_CFM",
+    [MSG_I(MM_SET_VENDOR_HWCONFIG_REQ)]        = "MM_SET_VENDOR_HWCONFIG_REQ",
+    [MSG_I(MM_SET_VENDOR_HWCONFIG_CFM)]        = "MM_SET_VENDOR_HWCONFIG_CFM",
     [MSG_I(MM_GET_FW_VERSION_REQ)]  = "MM_GET_FW_VERSION_REQ",
     [MSG_I(MM_GET_FW_VERSION_CFM)]  = "MM_GET_FW_VERSION_CFM",
     [MSG_I(MM_SET_RESUME_RESTORE_REQ)]          = "MM_SET_RESUME_RESTORE_REQ",
@@ -134,6 +135,8 @@ static const char *const rwnx_mmid2str[MSG_I(MM_MAX)] = {
     [MSG_I(MM_GET_WIFI_DISABLE_REQ)]            = "MM_GET_WIFI_DISABLE_REQ",
     [MSG_I(MM_GET_WIFI_DISABLE_CFM)]            = "MM_GET_WIFI_DISABLE_CFM",
     [MSG_I(MM_CFG_RSSI_CFM)]                    = "MM_CFG_RSSI_CFM",
+    [MSG_I(MM_SET_TXPWR_PER_STA_REQ)]            = "MM_SET_TXPWR_PER_STA_REQ",
+    [MSG_I(MM_SET_TXPWR_PER_STA_CFM)]            = "MM_SET_TXPWR_PER_STA_CFM",
 };
 
 static const char *const rwnx_dbgid2str[MSG_I(DBG_MAX)] = {
@@ -252,15 +255,15 @@ static const char *const rwnx_meshid2str[MSG_I(MESH_MAX)] = {
 #endif /* CONFIG_RWNX_FULLMAC */
 
 const char *const *rwnx_id2str[TASK_LAST_EMB + 1] = {
-	[TASK_MM]    = rwnx_mmid2str,
-	[TASK_DBG]   = rwnx_dbgid2str,
-	[TASK_SCAN]  = rwnx_scanid2str,
-	[TASK_TDLS]  = rwnx_tdlsid2str,
+    [TASK_MM]    = rwnx_mmid2str,
+    [TASK_DBG]   = rwnx_dbgid2str,
+    [TASK_SCAN]  = rwnx_scanid2str,
+    [TASK_TDLS]  = rwnx_tdlsid2str,
 #ifdef CONFIG_RWNX_FULLMAC
-	[TASK_SCANU] = rwnx_scanuid2str,
-	[TASK_ME]    = rwnx_meid2str,
-	[TASK_SM]    = rwnx_smid2str,
-	[TASK_APM]   = rwnx_apmid2str,
-	[TASK_MESH]  = rwnx_meshid2str,
+    [TASK_SCANU] = rwnx_scanuid2str,
+    [TASK_ME]    = rwnx_meid2str,
+    [TASK_SM]    = rwnx_smid2str,
+    [TASK_APM]   = rwnx_apmid2str,
+    [TASK_MESH]  = rwnx_meshid2str,
 #endif
 };

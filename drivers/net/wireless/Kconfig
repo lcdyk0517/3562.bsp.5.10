@@ -50,6 +50,7 @@ source "drivers/net/wireless/zydas/Kconfig"
 source "drivers/net/wireless/quantenna/Kconfig"
 source "drivers/net/wireless/rockchip_wlan/Kconfig"
 source "drivers/net/wireless/aic8800/Kconfig"
+source "drivers/net/wireless/zt9101/Kconfig"
 
 config PCMCIA_RAYCS
 	tristate "Aviator/Raytheon 2.4GHz wireless support"

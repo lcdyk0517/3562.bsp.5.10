@@ -65,6 +65,8 @@ static const struct sdio_device_id rk915_sdio_devices[] = {
 	{SDIO_DEVICE(MANUFACTURER_CODE, MANUFACTURER_ID_EAGLE_BASEX)},
         {},
 };
+/* udev 靠这条 modalias 按 SDIO VID/PID 自动加载 (vendor 源码漏了) */
+MODULE_DEVICE_TABLE(sdio, rk915_sdio_devices);
 
 struct device *hal_get_dev(void)
 {

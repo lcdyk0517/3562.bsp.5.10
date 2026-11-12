@@ -361,6 +361,17 @@ config LEDS_PCA9532_GPIO
 	  To use a pin as gpio pca9532_type in pca9532_platform data needs to
 	  set to PCA9532_TYPE_GPIO.
 
+config LED_3562
+	tristate "Power LED driver for RK3562 handhelds (led-3562)"
+	depends on GPIOLIB
+	depends on LEDS_CLASS
+	help
+	  Power/charge LED driver for RK3562 handhelds (red + green/blue
+	  GPIO LEDs) with user control through the LED class, a sysfs
+	  platform interface and optional low-battery threshold indication.
+
+	  Say Y here to build it in.
+
 config LEDS_GPIO
 	tristate "LED Support for GPIO connected LEDs"
 	depends on LEDS_CLASS

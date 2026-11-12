@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config ZT9101_USB
+	tristate "ZTop ZT9101 USB WiFi support"
+	depends on USB && CFG80211
+	help
+	  Driver for the ZTop ZT9101 USB WiFi adapter used on the Xifan
+	  XF55H handheld. Firmware and the vendor cfg file are read from
+	  /lib/firmware/zt9101 (path set via modprobe.d).
+
+	  Say M to build it as a module.

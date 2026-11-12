@@ -19,7 +19,7 @@
 
 #define MAC_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC_ARG(x) ((u8_l *)(x))[0], ((u8_l *)(x))[1], ((u8_l *)(x))[2], ((u8_l *)(x))[3], ((u8_l *)(x))[4], ((u8_l *)(x))[5]
-#define MANAGER_STR "[MANAGER] SDIO "
+#define MANAGER_STR "[MANAGER] USB "
 
 
 static struct sock *nl_sock = NULL;
@@ -195,7 +195,7 @@ void aicwf_nl_recv_msg(struct sk_buff *skb)
 
 			AICWFDBG(LOGSTEER, MANAGER_STR"AIC_NL_B_STEER_ROAM_TYPE (hostapd_cli)!\n");
 			AICWFDBG(LOGSTEER, MANAGER_STR"sta_mac="MAC_FMT"\n", MAC_ARG(roam_info->sta_mac));
-			AICWFDBG(LOGSTEER, MANAGER_STR"bss_mac="MAC_FMT" bss_ch=%u method=%s\n", 
+			AICWFDBG(LOGSTEER, MANAGER_STR"bss_mac="MAC_FMT" bss_ch=%u method=%s\n",
 				MAC_ARG(roam_info->bss_mac),
 				roam_info->bss_ch,
 				roam_info->method == 0 ? "11V" : "Deauth");

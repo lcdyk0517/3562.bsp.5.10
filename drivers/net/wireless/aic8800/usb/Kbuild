@@ -1,0 +1,73 @@
+# dArkOS3562: AIC8800DC USB 变体 (源码自 AveyondFly/aic8800-usb), 内核树内编译。
+# 逻辑对齐 vendor 外部模块 Makefile: CONFIG_USB_SUPPORT=y, 无 SDIO 文件,
+# MODULE_NAME 带 _usb 后缀。
+
+ccflags-y += -DAICWF_USB_SUPPORT
+ccflags-y += -DCONFIG_USB_SUPPORT
+ccflags-y += -DANDROID_PLATFORM
+ccflags-y += -DCONFIG_PLATFORM_UBUNTU
+ccflags-y += -DNX_VIRT_DEV_MAX=4
+ccflags-y += -DNX_REMOTE_STA_MAX_FOR_OLD_IC=8
+ccflags-y += -DNX_REMOTE_STA_MAX=32
+ccflags-y += -DNX_MU_GROUP_MAX=62
+ccflags-y += -DNX_TXDESC_CNT=64
+ccflags-y += -DNX_TX_MAX_RATES=4
+ccflags-y += -DNX_CHAN_CTXT_CNT=3
+ccflags-y += -DCONFIG_RWNX_OLD_IPC
+ccflags-y += -DCONFIG_START_FROM_BOOTROM
+ccflags-y += -DCONFIG_PMIC_SETTING
+ccflags-y += -DCONFIG_DPD
+ccflags-y += -Wno-error
+
+aic_load_fw_usb-y := \
+	aic_bluetooth_main.o \
+	aic_compat_8800d80.o \
+	aic_compat_8800d80x2.o \
+	aic_txrxif.o \
+	aicbluetooth.o \
+	aicbluetooth_cmds.o \
+	aicwf_rx_prealloc.o \
+	aicwf_txq_prealloc.o \
+	aicwf_usb.o \
+	md5.o
+
+obj-m += aic_load_fw_usb.o
+
+aic8800_fdrv_usb-y := \
+	aic_priv_cmd.o \
+	aic_vendor.o \
+	aicwf_compat_8800d80.o \
+	aicwf_compat_8800d80x2.o \
+	aicwf_compat_8800dc.o \
+	aicwf_tcp_ack.o \
+	aicwf_txrxif.o \
+	aicwf_usb.o \
+	aicwf_wext_linux.o \
+	ipc_host.o \
+	md5.o \
+	regdb.o \
+	rwnx_cfgfile.o \
+	rwnx_cmds.o \
+	rwnx_dini.o \
+	rwnx_irqs.o \
+	rwnx_main.o \
+	rwnx_mesh.o \
+	rwnx_mod_params.o \
+	rwnx_msg_rx.o \
+	rwnx_msg_tx.o \
+	rwnx_mu_group.o \
+	rwnx_pci.o \
+	rwnx_platform.o \
+	rwnx_radar.o \
+	rwnx_rx.o \
+	rwnx_strs.o \
+	rwnx_tdls.o \
+	rwnx_testmode.o \
+	rwnx_tx.o \
+	rwnx_txq.o \
+	rwnx_utils.o \
+	rwnx_v7.o \
+	rwnx_wakelock.o \
+	usb_host.o
+
+obj-m += aic8800_fdrv_usb.o

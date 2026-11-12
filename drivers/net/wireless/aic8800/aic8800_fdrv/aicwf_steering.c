@@ -15,7 +15,7 @@
 
 #define MAC_FMT_B "%02x:%02x:%02x:%02x:%02x:%02x"
 #define MAC_ARG_B(x) ((u8_l *)(x))[0], ((u8_l *)(x))[1], ((u8_l *)(x))[2], ((u8_l *)(x))[3], ((u8_l *)(x))[4], ((u8_l *)(x))[5]
-#define STEEER_STR "[STEERING] SDIO "
+#define STEEER_STR "[STEERING] USB "
 
 #ifdef CONFIG_BAND_STEERING
 

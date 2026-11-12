@@ -5,7 +5,13 @@
 
 obj-$(CONFIG_AIC8800_BTLPM_SUPPORT) += aic8800_btlpm/
 obj-$(CONFIG_AIC8800_WLAN_SUPPORT) += aic8800_fdrv/
-obj-$(CONFIG_AIC_WLAN_SUPPORT) += aic8800_bsp/
+# usb/ 是坏的扁平副本 (缺源文件, 无 Makefile 只有 Kbuild); USB 变体实际由
+# aic_load_fw/ 与 aic8800_fdrv/ 产出 (MODULE_NAME 带 _usb 后缀), 不走这里。
+#obj-$(CONFIG_AIC8800_USB) += usb/
+obj-$(CONFIG_AIC8800_USB) += aic_load_fw/
+# SDIO bsp 与 USB loader 都导出 get_adap_test, 同场 modpost 会 FATAL;
+# bsp 源码无改动, SDIO 栈沿用基准镜像原厂 ko, 不参与树内构建。
+#obj-$(CONFIG_AIC_WLAN_SUPPORT) += aic8800_bsp/
 
 ########## config option ##########
 export CONFIG_USE_FW_REQUEST = n

@@ -17,6 +17,7 @@
 
 #include <linux/delay.h>
 #include <linux/extcon.h>
+#include <linux/extcon-provider.h>
 #include <linux/gpio.h>
 #include <linux/iio/consumer.h>
 #include <linux/iio/iio.h>
@@ -308,6 +309,10 @@ struct rk817_charger {
 	struct notifier_block cable_cg_nb;
 	struct notifier_block cable_host_nb;
 	struct notifier_block cable_discnt_nb;
+	struct delayed_work plug_poll_work;
+	int last_plug_in_sts;
+	bool charger_use_pmic_plug;
+	bool fixed_usb_host_vbus;
 	unsigned int bc_event;
 	enum charger_t usb_charger;
 	enum charger_t dc_charger;
@@ -1014,6 +1019,10 @@ static void rk817_charge_host_evt_worker(struct work_struct *work)
 			struct rk817_charger, host_work.work);
 	struct extcon_dev *edev = charge->cable_edev;
 
+	/* Fixed host ports supply their own VBUS; RK817 OTG masks plug detection. */
+	if (charge->fixed_usb_host_vbus)
+		return;
+
 	/* Determine cable/charger type */
 	if (extcon_get_state(edev, EXTCON_USB_VBUS_EN) > 0) {
 		DBG("receive type-c notifier event: OTG ON...\n");
@@ -1041,6 +1050,18 @@ static void rk817_charger_evt_worker(struct work_struct *work)
 	enum charger_t charger = USB_TYPE_UNKNOWN_CHARGER;
 	static const char * const event[] = {"UN", "NONE", "USB",
 					     "AC", "CDP1.5A"};
+
+	/* fixed-usb-host-vbus 板 (NGP45HT): PHY 把常供 host 5V 误判成 DCP,
+	 * extcon 状态不可信; 以 PMIC PLUG_IN_STS 为准 (与轮询同一判据)。 */
+	if (charge->fixed_usb_host_vbus) {
+		int plug = rk817_charge_field_read(charge, PLUG_IN_STS);
+
+		charge->usb_charger = plug ? USB_TYPE_AC_CHARGER :
+					    USB_TYPE_NONE_CHARGER;
+		charge->last_plug_in_sts = plug;
+		rk817_charge_set_chrg_param(charge, charge->usb_charger);
+		return;
+	}
 
 	/* Determine cable/charger type */
 	if (extcon_get_state(edev, EXTCON_CHG_USB_SDP) > 0)
@@ -1303,7 +1324,8 @@ static void rk817_charge_pre_init(struct rk817_charger *charge)
 
 	rk817_charge_set_chrg_finish_condition(charge);
 
-	if (rk817_charge_get_otg_state(charge))
+	/* The fixed host supply does not hold a reference to otg5v_rdev. */
+	if (!charge->fixed_usb_host_vbus && rk817_charge_get_otg_state(charge))
 		rk817_charge_otg_disable(charge);
 	rk817_charge_field_write(charge, OTG_EN, OTG_DISABLE);
 	rk817_charge_set_otg_in(charge, OFFLINE);
@@ -1370,6 +1392,10 @@ static int rk817_charge_parse_dt(struct rk817_charger *charge)
 	pdata->chrg_term_mode = DEFAULT_CHRG_TERM_MODE;
 
 	pdata->extcon = of_property_read_bool(np, "extcon");
+	charge->fixed_usb_host_vbus =
+		of_property_read_bool(np, "rocknix,fixed-usb-host-vbus");
+	charge->charger_use_pmic_plug =
+		of_property_read_bool(np, "rockchip,charger-use-pmic-plug");
 
 	ret = of_property_read_u32(np, "max_chrg_current",
 				   &pdata->max_chrg_current);
@@ -1472,6 +1498,67 @@ static int rk817_charge_parse_dt(struct rk817_charger *charge)
 	return -ENODEV;
 }
 #endif
+
+#define PLUG_POLL_INTERVAL_MS	1000
+#define RK817_SYS_STS_REG	0xf0
+#define RK817_PLUG_IN_STS_BIT	BIT(6)
+
+/*
+ * NGP45HT 的 u2phy 把常供 host 5V 误判成 DCP 且不再翻转, extcon 收不到
+ * 拔出事件, ac_in 会一直停在 1 (未插充电器也显示充电)。PMIC PLUG_IN_STS
+ * 是真实 VBUS 状态, 定期轮询并在变化时修正充电参数。
+ */
+static void rk817_charge_plug_poll_work(struct work_struct *work)
+{
+	struct rk817_charger *charge = container_of(work,
+			struct rk817_charger, plug_poll_work.work);
+	unsigned int reg_val;
+	int plug_in_sts, ret;
+
+	ret = regmap_read(charge->regmap, RK817_SYS_STS_REG, &reg_val);
+	if (ret) {
+		dev_err(charge->dev, "failed to read SYS_STS: %d\n", ret);
+		goto reschedule;
+	}
+
+	plug_in_sts = !!(reg_val & RK817_PLUG_IN_STS_BIT);
+	/* 除跳变外也纠正被其它路径置错的状态: 未插却有 online, 或已插却
+	 * ac_in=0 (初始化竞态/事件丢失), 保证 1s 内自愈。 */
+	if (plug_in_sts != charge->last_plug_in_sts ||
+	    (plug_in_sts && !charge->ac_in) ||
+	    (!plug_in_sts && rk817_charge_online(charge))) {
+		charge->last_plug_in_sts = plug_in_sts;
+		if (plug_in_sts) {
+			dev_info(charge->dev,
+				 "charger plugged in (poll, reg=0x%x)\n",
+				 reg_val);
+			if (charge->pdata->extcon && charge->cable_edev) {
+				extcon_set_state(charge->cable_edev,
+						 EXTCON_USB_HOST, false);
+				extcon_set_state(charge->cable_edev,
+						 EXTCON_USB_VBUS_EN, false);
+			}
+			if (rk817_charge_get_otg_state(charge))
+				rk817_charge_set_otg_state(charge,
+							   USB_OTG_POWER_OFF);
+			rk817_charge_set_chrg_param(charge, USB_TYPE_AC_CHARGER);
+		} else {
+			dev_info(charge->dev,
+				 "charger unplugged (poll, reg=0x%x)\n",
+				 reg_val);
+			rk817_charge_set_chrg_param(charge,
+						    USB_TYPE_NONE_CHARGER);
+			/* PLUG_IN_STS 掉电时 CHRG_IN 会被清掉, 重新启用
+			 * VLIM_EN=1 VLIM_SEL=5 ILIM_EN=1 ILIM_SEL=3, 否则下次
+			 * 插入检测不到有效输入。 */
+			regmap_write(charge->regmap, RK817_CHRG_IN, 0xdb);
+		}
+	}
+
+reschedule:
+	schedule_delayed_work(&charge->plug_poll_work,
+			      msecs_to_jiffies(PLUG_POLL_INTERVAL_MS));
+}
 
 static void rk817_charge_irq_delay_work(struct work_struct *work)
 {
@@ -1644,9 +1731,28 @@ static int rk817_charge_probe(struct platform_device *pdev)
 		goto irq_fail;
 	}
 
+	/* Fixed host ports supply their own VBUS; disable RK817 OTG switch. */
+	if (charge->fixed_usb_host_vbus) {
+		regmap_write(charge->regmap, RK817_CHRG_IN, 0xdb);
+		dev_info(charge->dev, "fixed host VBUS: RK817 OTG switch disabled\n");
+	}
+
 	if (charge->pdata->extcon) {
 		schedule_delayed_work(&charge->host_work, 0);
 		schedule_delayed_work(&charge->usb_work, 0);
+	}
+
+	if (charge->charger_use_pmic_plug) {
+		charge->last_plug_in_sts = rk817_charge_get_plug_in_status(charge);
+		if (charge->last_plug_in_sts) {
+			dev_info(charge->dev, "charger already plugged in at boot\n");
+			rk817_charge_set_chrg_param(charge, USB_TYPE_AC_CHARGER);
+		}
+
+		INIT_DELAYED_WORK(&charge->plug_poll_work,
+				  rk817_charge_plug_poll_work);
+		schedule_delayed_work(&charge->plug_poll_work,
+				      msecs_to_jiffies(PLUG_POLL_INTERVAL_MS));
 	}
 
 	rk817_chage_debug(charge);
@@ -1746,6 +1852,8 @@ static void rk817_charger_shutdown(struct platform_device *dev)
 	cancel_delayed_work_sync(&charge->usb_work);
 	cancel_delayed_work_sync(&charge->dc_work);
 	cancel_delayed_work_sync(&charge->irq_work);
+	if (charge->charger_use_pmic_plug)
+		cancel_delayed_work_sync(&charge->plug_poll_work);
 	flush_workqueue(charge->usb_charger_wq);
 	flush_workqueue(charge->dc_charger_wq);
 

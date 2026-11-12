@@ -1,3 +1,16 @@
+
+config AIC8800_USB
+	tristate "AIC8800DC USB WiFi support (XF55H/NGP45HT)"
+	depends on USB && CFG80211
+	select WIRELESS_EXT
+	select WEXT_PRIV
+	help
+	  AICsemi AIC8800DC USB WiFi driver (RAM-firmware loader aic_load_fw_usb
+	  + WLAN driver aic8800_fdrv_usb). Built from in-tree sources (from
+	  AveyondFly/aic8800-usb). Used by the Xifan XF55H / NGP45HT handhelds
+	  whose WiFi hangs on the USB2 host bus.
+
+
 config AIC_WLAN_SUPPORT
 	tristate "AIC wireless Support"
 	select WIRELESS_EXT

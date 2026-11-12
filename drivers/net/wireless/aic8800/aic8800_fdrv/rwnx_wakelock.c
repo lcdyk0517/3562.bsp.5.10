@@ -55,11 +55,13 @@ void rwnx_wakeup_unregister(struct wakeup_source *ws)
 
 void rwnx_wakeup_lock(struct wakeup_source *ws)
 {
+    AICWFDBG(LOGDEBUG, "%s enter \r\n", __func__);
 	__pm_stay_awake(ws);
 }
 
 void rwnx_wakeup_unlock(struct wakeup_source *ws)
 {
+    AICWFDBG(LOGDEBUG, "%s enter \r\n", __func__);
 	__pm_relax(ws);
 }
 
