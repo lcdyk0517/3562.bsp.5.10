@@ -187,10 +187,11 @@
 			sound-dai = <&spdif_out>;
 		};
 	};
-	/* Fan motor rail — GPIO3_B0 high enables (RG52 Mini uses GPIO0_C3).
-	* Marked regulator-boot-on so the rail is powered before pwm-fan
-	* probes; without that the fan-supply is locked off when pwm-fan
-	* tries to spin up. */
+	/* Fan motor rail — GPIO3_B0 high enables.
+	* 不要标 regulator-boot-on: regulator-fixed 探测时会按 boot-on 直接把
+	* EN 脚输出高, 而这时 pwm4/pwm-fan 还没 probe, PWM 脚未配置 -> 风扇
+	* 全速一下. pwm-fan 驱动会在 probe 里先设 PWM=0 再 regulator_enable.
+	* 使能脚用下拉, 驱动接管前保持关断. */
 	fan_vcc: fan-vcc {
 		compatible = "regulator-fixed";
 		regulator-name = "fan-vcc";
@@ -198,7 +199,6 @@
 		pinctrl-0 = <&fan_vcc_en_gpio>;
 		gpios = <&gpio3 RK_PB0 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		regulator-boot-on;
 	};
 	
 	/* pwm-fan consumer — PWM4 channel 0 drives speed; GPIO2_A1 falling
@@ -1284,7 +1284,7 @@
 	
 	fan {
 		fan_vcc_en_gpio: fan-vcc-en-gpio {
-			rockchip,pins = <3 RK_PB0 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <3 RK_PB0 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 		
 		fan_det_gpio: fan-det-gpio {

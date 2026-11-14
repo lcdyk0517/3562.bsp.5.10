@@ -407,19 +407,15 @@ static int pwm_fan_probe(struct platform_device *pdev)
 			return PTR_ERR(ctx->reg_en);
 
 		ctx->reg_en = NULL;
-	} else {
-		ret = regulator_enable(ctx->reg_en);
-		if (ret) {
-			dev_err(dev, "Failed to enable fan supply: %d\n", ret);
-			return ret;
-		}
-		ret = devm_add_action_or_reset(dev, pwm_fan_regulator_disable,
-					       ctx->reg_en);
-		if (ret)
-			return ret;
 	}
 
-	ctx->pwm_value = MAX_PWM;
+	/*
+	 * dArkOS: 不要按上游那样在 probe 时先拉满占空比再等 hwmon/thermal
+	 * 改写, 否则 U-Boot 交接到内核时会看到风扇突然全速一下. 这里直接
+	 * 以 0 占空比启动 (输出脚被 PWM 驱动拉低, 不会浮空), 转速由 hwmon
+	 * (fanctl) / thermal cooling 之后设置.
+	 */
+	ctx->pwm_value = 0;
 
 	pwm_init_state(ctx->pwm, &state);
 	/*
@@ -432,14 +428,27 @@ static int pwm_fan_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	/* Set duty cycle to maximum allowed and enable PWM output */
-	state.duty_cycle = ctx->pwm->args.period - 1;
+	/* Enable PWM output at zero duty */
+	state.duty_cycle = 0;
 	state.enabled = true;
 
 	ret = pwm_apply_state(ctx->pwm, &state);
 	if (ret) {
 		dev_err(dev, "Failed to configure PWM: %d\n", ret);
 		return ret;
+	}
+
+	/* PWM 已经是 0 占空比, 再给风扇供电: 交接时不会全速一下 */
+	if (ctx->reg_en) {
+		ret = regulator_enable(ctx->reg_en);
+		if (ret) {
+			dev_err(dev, "Failed to enable fan supply: %d\n", ret);
+			return ret;
+		}
+		ret = devm_add_action_or_reset(dev, pwm_fan_regulator_disable,
+					       ctx->reg_en);
+		if (ret)
+			return ret;
 	}
 	timer_setup(&ctx->rpm_timer, sample_timer, 0);
 	ret = devm_add_action_or_reset(dev, pwm_fan_pwm_disable, ctx);

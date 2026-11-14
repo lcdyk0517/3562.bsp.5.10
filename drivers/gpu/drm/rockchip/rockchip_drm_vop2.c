@@ -3567,6 +3567,204 @@ static void vop2_crtc_load_lut(struct drm_crtc *crtc)
 	}
 }
 
+/*
+ * 系统级色温 (白点偏移), 由 VOP2 gamma LUT 实现:
+ *   每帧/每次 modeset 后由本驱动重新写入, 因此游戏/Kodi 等重新 modeset
+ *   的自绘客户端也能保持同一色温; 6500K 为中性, 0 = 关闭.
+ * 用户接口: /sys/module/rockchipdrm/parameters/colortemp (开尔文)
+ */
+#define COLORTEMP_MIN_K		3000
+#define COLORTEMP_MAX_K		9000
+
+static int colortemp_kelvin;
+static int colortemp_gain[3] = { 1000, 1000, 1000 };	/* 手动 gamma, 千分比 */
+static struct vop2 *colortemp_vop2;
+
+/* 3000..9000K, 250K 步进; 归一化到 6500K = 1000/1000/1000 */
+static const struct {
+	u16 kelvin;
+	u16 gain[3];
+} colortemp_table[] = {
+	{ 3000, { 1000, 697, 440 } },
+	{ 3250, { 1000, 729, 505 } },
+	{ 3500, { 1000, 758, 563 } },
+	{ 3750, { 1000, 785, 616 } },
+	{ 4000, { 1000, 810, 664 } },
+	{ 4250, { 1000, 834, 709 } },
+	{ 4500, { 1000, 856, 750 } },
+	{ 4750, { 1000, 877, 788 } },
+	{ 5000, { 1000, 897, 824 } },
+	{ 5250, { 1000, 916, 857 } },
+	{ 5500, { 1000, 935, 889 } },
+	{ 5750, { 1000, 952, 919 } },
+	{ 6000, { 1000, 969, 947 } },
+	{ 6250, { 1000, 985, 974 } },
+	{ 6500, { 1000, 1000, 1000 } },
+	{ 6750, { 969, 955, 1000 } },
+	{ 7000, { 933, 934, 1000 } },
+	{ 7250, { 906, 919, 1000 } },
+	{ 7500, { 884, 906, 1000 } },
+	{ 7750, { 866, 896, 1000 } },
+	{ 8000, { 851, 887, 1000 } },
+	{ 8250, { 837, 879, 1000 } },
+	{ 8500, { 826, 872, 1000 } },
+	{ 8750, { 815, 866, 1000 } },
+	{ 9000, { 806, 860, 1000 } },
+};
+
+static void colortemp_gains(u32 *gr, u32 *gg, u32 *gb)
+{
+	int k = READ_ONCE(colortemp_kelvin);
+	int n = ARRAY_SIZE(colortemp_table);
+	int i;
+
+	if (k <= 0) {	/* 0 = 关闭色温, 只保留用户 gamma */
+		*gr = colortemp_gain[0];
+		*gg = colortemp_gain[1];
+		*gb = colortemp_gain[2];
+		return;
+	}
+
+	if (k <= colortemp_table[0].kelvin)
+		i = 0;
+	else if (k >= colortemp_table[n - 1].kelvin)
+		i = n - 2;
+	else
+		for (i = 0; i < n - 2; i++)
+			if (k < colortemp_table[i + 1].kelvin)
+				break;
+
+	if (k <= colortemp_table[0].kelvin) {
+		*gr = colortemp_table[0].gain[0];
+		*gg = colortemp_table[0].gain[1];
+		*gb = colortemp_table[0].gain[2];
+		return;
+	}
+	if (k >= colortemp_table[n - 1].kelvin) {
+		*gr = colortemp_table[n - 1].gain[0];
+		*gg = colortemp_table[n - 1].gain[1];
+		*gb = colortemp_table[n - 1].gain[2];
+		return;
+	}
+
+	{
+		u32 lo = colortemp_table[i].kelvin;
+		u32 hi = colortemp_table[i + 1].kelvin;
+		u32 f = (u32)(((k - lo) * 1000) / (hi - lo));
+		int c;
+
+		for (c = 0; c < 3; c++) {
+			u32 a = colortemp_table[i].gain[c];
+			u32 b = colortemp_table[i + 1].gain[c];
+			u32 v = a + (s32)(b - a) * f / 1000;
+
+			if (c == 0) *gr = v;
+			else if (c == 1) *gg = v;
+			else *gb = v;
+		}
+	}
+
+	/* 与用户 gamma 合成: 色温 x gamma (千分比), 与用户态 colortemp 一致 */
+	*gr = (u32)((u64)*gr * colortemp_gain[0] / 1000);
+	*gg = (u32)((u64)*gg * colortemp_gain[1] / 1000);
+	*gb = (u32)((u64)*gb * colortemp_gain[2] / 1000);
+}
+
+static void colortemp_fill_lut(struct vop2_video_port *vp)
+{
+	u32 len = vp->gamma_lut_len;
+	u32 gr, gg, gb, i;
+
+	if (!vp->lut || len < 2)
+		return;
+
+	colortemp_gains(&gr, &gg, &gb);
+	for (i = 0; i < len; i++) {
+		u32 r = (u32)((u64)i * gr / 1000);
+		u32 g = (u32)((u64)i * gg / 1000);
+		u32 b = (u32)((u64)i * gb / 1000);
+
+		vp->lut[i] = b * len * len + g * len + r;
+	}
+}
+
+static void colortemp_apply_vp(struct vop2_video_port *vp)
+{
+	if (colortemp_kelvin <= 0)
+		return;
+
+	colortemp_fill_lut(vp);
+	vp->gamma_lut_active = true;
+	vop2_crtc_load_lut(&vp->rockchip_crtc.crtc);
+}
+
+static void colortemp_work_fn(struct work_struct *work)
+{
+	struct vop2 *vop2 = READ_ONCE(colortemp_vop2);
+	int i;
+
+	if (!vop2)
+		return;
+
+	for (i = 0; i < vop2->data->nr_vps; i++) {
+		struct vop2_video_port *vp = &vop2->vps[i];
+
+		if (!vp->rockchip_crtc.crtc.state ||
+		    !vp->rockchip_crtc.crtc.state->active)
+			continue;
+		colortemp_apply_vp(vp);
+		vop2_cfg_done(&vp->rockchip_crtc.crtc);
+	}
+}
+
+static DECLARE_WORK(colortemp_work, colortemp_work_fn);
+
+static int colortemp_param_set(const char *val, const struct kernel_param *kp)
+{
+	int k, ret;
+
+	ret = kstrtoint(val, 0, &k);
+	if (ret)
+		return ret;
+	if (k && (k < COLORTEMP_MIN_K || k > COLORTEMP_MAX_K))
+		return -EINVAL;
+
+	WRITE_ONCE(colortemp_kelvin, k);
+	schedule_work(&colortemp_work);
+	return 0;
+}
+
+static const struct kernel_param_ops colortemp_param_ops = {
+	.set = colortemp_param_set,
+	.get = param_get_int,
+};
+
+module_param_cb(colortemp, &colortemp_param_ops, &colortemp_kelvin, 0644);
+
+static int colortemp_gain_set(const char *val, const struct kernel_param *kp)
+{
+	int k, ret;
+
+	ret = kstrtoint(val, 0, &k);
+	if (ret)
+		return ret;
+	if (k < 100 || k > 2000)
+		return -EINVAL;
+
+	*(int *)kp->arg = k;
+	schedule_work(&colortemp_work);
+	return 0;
+}
+
+static const struct kernel_param_ops colortemp_gain_ops = {
+	.set = colortemp_gain_set,
+	.get = param_get_int,
+};
+
+module_param_cb(colortemp_r, &colortemp_gain_ops, &colortemp_gain[0], 0644);
+module_param_cb(colortemp_g, &colortemp_gain_ops, &colortemp_gain[1], 0644);
+module_param_cb(colortemp_b, &colortemp_gain_ops, &colortemp_gain[2], 0644);
+
 static void rockchip_vop2_crtc_fb_gamma_set(struct drm_crtc *crtc, u16 red,
 					    u16 green, u16 blue, int regno)
 {
@@ -8534,6 +8732,12 @@ static void vop2_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_crtc_state
 		vop2_wait_for_fs_by_done_bit_status(vp);
 	}
 
+	/* 系统级色温: modeset 后重新写回 gamma LUT */
+	if (colortemp_kelvin > 0) {
+		colortemp_apply_vp(vp);
+		vop2_cfg_done(crtc);
+	}
+
 	/*
 	 * In RK3588 VOP, HDMI1/eDP1 MUX1 module's reset signal should be released
 	 * when PD_VOP turn on. If this reset signal is not be released, the HDMI1
@@ -10598,6 +10802,10 @@ static void vop2_crtc_atomic_flush(struct drm_crtc *crtc, struct drm_crtc_state 
 	} else {
 		VOP_MODULE_SET(vop2, vp, cubic_lut_update_en, 0);
 	}
+
+	/* 系统级色温: 覆盖客户端的 gamma, 每次提交都保持 */
+	if (colortemp_kelvin > 0)
+		colortemp_apply_vp(vp);
 
 	if (vcstate->line_flag)
 		vop2_crtc_enable_line_flag_event(crtc, vcstate->line_flag);
@@ -12750,6 +12958,7 @@ static int vop2_bind(struct device *dev, struct device *master, void *data)
 	vop2->version = vop2_data->version;
 
 	dev_set_drvdata(dev, vop2);
+	WRITE_ONCE(colortemp_vop2, vop2);
 
 	vop2->support_multi_area = of_property_read_bool(dev->of_node, "support-multi-area");
 	vop2->disable_afbc_win = of_property_read_bool(dev->of_node, "disable-afbc-win");
