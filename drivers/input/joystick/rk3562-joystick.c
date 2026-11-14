@@ -150,7 +150,8 @@ struct rk3562_joystick {
 
 	/* ---- ADC 按键 ---- */
 	unsigned int adc_btn_codes[NUM_ADC_BTNS];	/* 键码 (0 = 未用) */
-	int adc_btn_thresh[NUM_ADC_BTNS];		/* 按下阈值 (微伏) */
+	int adc_btn_thresh[NUM_ADC_BTNS];		/* 按下上限 (微伏, 不含) */
+	int adc_btn_min[NUM_ADC_BTNS];			/* 按下下限 (微伏, 含) */
 
 	/* ---- 摇杆校准 (DT 毫伏 -> 微伏) ---- */
 	int axis_min_uv;
@@ -969,9 +970,13 @@ static void rk3562_poll_adc_buttons(struct rk3562_joystick *joy,
 			continue;
 
 		raw *= 1000; /* 毫伏 -> 微伏 */
+		/* 区间判定: press-min-microvolt <= raw < press-threshold-microvolt.
+		 * 同一电阻梯上只挂部分按键时 (FN 和音量键共用通道), 用下限把
+		 * 别人的电压段排除掉, 避免 FN 被音量键电压误触发. */
 		input_report_key(input,
 				 rk3562_swap_code(joy, joy->adc_btn_codes[i]),
-				 raw < joy->adc_btn_thresh[i] ? 1 : 0);
+				 (raw >= joy->adc_btn_min[i] &&
+				  raw < joy->adc_btn_thresh[i]) ? 1 : 0);
 	}
 }
 
@@ -1400,7 +1405,7 @@ static int rk3562_parse_adc_buttons(struct rk3562_joystick *joy,
 	int ret;
 
 	for_each_child_of_node(node, child) {
-		u32 code, thresh;
+		u32 code, thresh, min_uv;
 
 		/* GPIO 按键子节点 (带 gpios) 在别处处理 */
 		if (of_find_property(child, "gpios", NULL))
@@ -1430,8 +1435,12 @@ static int rk3562_parse_adc_buttons(struct rk3562_joystick *joy,
 					 &thresh))
 			thresh = 80000; /* 缺省 80 mV */
 
+		if (of_property_read_u32(child, "press-min-microvolt", &min_uv))
+			min_uv = 0;
+
 		joy->adc_btn_codes[i] = code;
 		joy->adc_btn_thresh[i] = thresh;
+		joy->adc_btn_min[i] = min_uv;
 		i++;
 	}
 

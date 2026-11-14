@@ -20,6 +20,9 @@
 #include <linux/property.h>
 #include <linux/slab.h>
 
+/* 默认按下窗口半宽 (毫伏), 可由 adc-keys,drift-microvolt 覆盖 */
+#define ADC_KEYS_DEFAULT_DRIFT_MV	100
+
 struct adc_keys_button {
 	u32 voltage;
 	u32 keycode;
@@ -30,6 +33,7 @@ struct adc_keys_state {
 	u32 num_keys;
 	u32 last_key;
 	u32 keyup_voltage;
+	u32 drift;
 	const struct adc_keys_button *map;
 };
 
@@ -41,26 +45,27 @@ extern void rk_send_key_f_key_down(void);
 static void adc_keys_poll(struct input_polled_dev *dev)
 {
 	struct adc_keys_state *st = dev->private;
-	int i, value, ret;
-	u32 diff, closest = 0xffffffff;
+	int i, value, ret, diff;
 	u32 keycode = 0;
 
 	ret = iio_read_channel_processed(st->channel, &value);
 	if (unlikely(ret < 0)) {
 		/* Forcibly release key if any was pressed */
-		value = st->keyup_voltage;
+		keycode = 0;
 	} else {
+		/*
+		 * 窗口判定 (arkos.bsp.4.4 rk_keys 同款): 读数落在某按键标称
+		 * 电压 +/- drift 内才算按下, 不做"取最近". 这样同一条电阻梯上
+		 * 只保留部分按键时 (例如 FN 交给手柄驱动), 其它电压不会误报.
+		 */
 		for (i = 0; i < st->num_keys; i++) {
-			diff = abs(st->map[i].voltage - value);
-			if (diff < closest) {
-				closest = diff;
+			diff = abs((int)st->map[i].voltage - value);
+			if (diff <= (int)st->drift) {
 				keycode = st->map[i].keycode;
+				break;
 			}
 		}
 	}
-
-	if (abs(st->keyup_voltage - value) < closest)
-		keycode = 0;
 
 	if (st->last_key && st->last_key != keycode) {
 #ifdef CONFIG_JOYSTICK_SINGLEADCJOY
@@ -160,6 +165,12 @@ static int adc_keys_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 	st->keyup_voltage /= 1000;
+
+	if (device_property_read_u32(dev, "adc-keys,drift-microvolt",
+				     &st->drift))
+		st->drift = ADC_KEYS_DEFAULT_DRIFT_MV;
+	else
+		st->drift /= 1000;
 
 	error = adc_keys_load_keymap(dev, st);
 	if (error)

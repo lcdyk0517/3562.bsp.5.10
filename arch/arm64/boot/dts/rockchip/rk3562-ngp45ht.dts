@@ -31,6 +31,8 @@
 		keyup-threshold-microvolt = <1800000>;
 		poll-interval = <100>;
 		autorepeat;
+		/* 窗口判定半宽 (微伏): 只有落在标称电压 +/-100mV 内才算按下 */
+		adc-keys,drift-microvolt = <100000>;
 		
 		vol-up-key {
 			label = "volume up";
@@ -44,11 +46,6 @@
 			press-threshold-microvolt = <300000>;
 		};
 		
-		back-key {
-			label = "BTN_FN";
-			linux,code = <BTN_TRIGGER_HAPPY1>;
-			press-threshold-microvolt = <980000>;
-		};
 	};
 	
 	play_joystick {
@@ -56,8 +53,9 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_key_pin &moto_gpio>;
 		io-channels = <&saradc1 5>, <&saradc1 4>,
-		<&saradc1 7>, <&saradc1 6>;
-		io-channel-names = "joy_x", "joy_y", "joy_rx", "joy_ry";
+		<&saradc1 7>, <&saradc1 6>, <&saradc0 1>;
+		io-channel-names = "joy_x", "joy_y", "joy_rx", "joy_ry",
+				   "back-key";
 		
 		poll-interval = <30>;
 		axis-min-value-mv = <250>;
@@ -85,6 +83,15 @@
 	sw15 { label = "BTN_HOME";       gpios = <&gpio1 RK_PC7 GPIO_ACTIVE_LOW>; linux,code = <BTN_MODE>; };
 	sw16 { label = "BTN_L3";         gpios = <&gpio0 RK_PC6 GPIO_ACTIVE_LOW>; linux,code = <BTN_THUMBL>; };
 	sw17 { label = "BTN_R3";         gpios = <&gpio0 RK_PC7 GPIO_ACTIVE_LOW>; linux,code = <BTN_THUMBR>; };
+
+	/* FN/BACK 与音量键共用 saradc0 通道 1: 音量键由 adc-keys 按窗口处理,
+	 * FN 只在这个区间 (640mV..1300mV) 里由手柄驱动上报, 互不误触. */
+	back-key {
+		label = "BTN_FN";
+		linux,code = <BTN_TRIGGER_HAPPY1>;
+		press-min-microvolt = <640000>;
+		press-threshold-microvolt = <1300000>;
+	};
 	};
 	
 	backlight: backlight {
