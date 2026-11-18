@@ -1031,6 +1031,18 @@ static void rk817_charge_host_evt_worker(struct work_struct *work)
 				rk817_charge_set_otg_state(charge,
 							   USB_OTG_POWER_OFF);
 			DBG("otg power from dc adapter\n");
+		} else if (rk817_charge_get_plug_in_status(charge) &&
+			   !extcon_get_state(edev, EXTCON_USB_HOST) &&
+			   !extcon_get_state(edev, EXTCON_CHG_USB_SDP) &&
+			   !extcon_get_state(edev, EXTCON_CHG_USB_DCP) &&
+			   !extcon_get_state(edev, EXTCON_CHG_USB_CDP)) {
+			/* PMIC 见 VBUS 但 PHY 既非 BC 充电器也非 USB host: 多为 PD/私有
+			 * 充电头无法被 legacy BC 识别. 按 DC 充电处理, 用保守电流并关 OTG. */
+			DBG("pmic plug without BC type: fallback DC charger\n");
+			rk817_charge_set_chrg_param(charge, DC_TYPE_DC_CHARGER);
+			rk817_charge_set_input_current(charge, INPUT_1500MA);
+			rk817_charge_set_otg_in(charge, ONLINE);
+			rk817_charge_set_otg_state(charge, USB_OTG_POWER_OFF);
 		} else {
 			rk817_charge_set_otg_state(charge, USB_OTG_POWER_ON);
 		}
@@ -1076,6 +1088,16 @@ static void rk817_charger_evt_worker(struct work_struct *work)
 		    event[charger]);
 		charge->usb_charger = charger;
 		rk817_charge_set_chrg_param(charge, charger);
+	} else if (rk817_charge_get_plug_in_status(charge) &&
+		   !extcon_get_state(edev, EXTCON_USB_HOST) &&
+		   !extcon_get_state(edev, EXTCON_CHG_USB_SDP) &&
+		   !extcon_get_state(edev, EXTCON_CHG_USB_DCP) &&
+		   !extcon_get_state(edev, EXTCON_CHG_USB_CDP)) {
+		DBG("pmic plug without BC type: fallback DC charger\n");
+		rk817_charge_set_chrg_param(charge, DC_TYPE_DC_CHARGER);
+		rk817_charge_set_input_current(charge, INPUT_1500MA);
+		rk817_charge_set_otg_in(charge, ONLINE);
+		rk817_charge_set_otg_state(charge, USB_OTG_POWER_OFF);
 	}
 }
 

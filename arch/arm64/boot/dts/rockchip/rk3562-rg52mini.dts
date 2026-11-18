@@ -138,22 +138,22 @@
 		>;
 		default-brightness-level = <200>;
 	};
-
+	
 	power-leds {
 		compatible = "led-3562";
 		battery-threshold = <20>;
-
+		
 		led-red {
 			label = "red";
 			gpios = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
 			on-below-threshold;
 		};
-
+		
 		led-green {
 			label = "green";
 			gpios = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
 		};
-
+		
 	};
 	
 	pdm_codec: dummy-codec {
@@ -803,9 +803,11 @@
 		
 		battery {
 			compatible = "rk817,battery";
-			ocv_table = <3500 3528 3565 3597 3626 3654 3689 3733
-			3776 3812 3845 3876 3910 3952 3990 4015
-			4034 4069 4090 4113 4173>;
+			ocv_table = <
+			3300 3350 3400 3450 3500 3550 3600
+			3650 3700 3750 3800 3850 3900 3940
+			3980 4020 4060 4100 4130 4150 4170
+			>;
 			design_capacity = <4654>;
 			design_qmax = <5119>;
 			bat_res = <78>;
