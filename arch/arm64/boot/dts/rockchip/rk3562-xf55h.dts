@@ -219,6 +219,32 @@
 		};
 	};
 	
+	fan_vcc: fan-vcc {
+		compatible = "regulator-fixed";
+		regulator-name = "fan-vcc";
+		pinctrl-names = "default";
+		pinctrl-0 = <&fan_vcc_en_gpio>;
+		gpios = <&gpio0 RK_PC3 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+	
+	pwm-fan {
+		status = "okay";
+		compatible = "pwm-fan";
+		#cooling-cells = <2>;
+		fan-supply = <&fan_vcc>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&fan_det_gpio>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <RK_PA1 IRQ_TYPE_EDGE_FALLING>;
+		pwms = <&pwm4 0 50000 0>;
+		/* dArkOS: 手动风扇 — 不挂 temp-trips (自动曲线会在阈值附近抖动,
+		* 风扇"转一下就停"). 控制走 hwmon sysfs:
+		*   echo 0-255 > /sys/class/hwmon/hwmonX/pwm1   (0=关)
+		* cooling-levels 只提供 pwm1 数值到百分比的换表. */
+		cooling-levels = <0 50 100 150 200 255>;
+	};
+	
 	rk817_sound: rk817-sound {
 		status = "okay";
 		compatible = "rockchip,multicodecs-card";
@@ -784,9 +810,9 @@
 		battery {
 			compatible = "rk817,battery";
 			ocv_table = <
-			3300 3350 3400 3450 3500 3550 3600
-			3650 3700 3750 3800 3850 3900 3940
-			3980 4020 4060 4100 4130 4150 4170
+			3500 3549 3596 3648 3703 3755 3794 
+			3821 3843 3865 3896 3912 3931 3969
+			4007 4029 4036 4041 4057 4103 4182
 			>;
 			design_capacity = <3727>;
 			design_qmax = <4100>;
@@ -794,7 +820,7 @@
 			sleep_enter_current = <300>;
 			sleep_exit_current = <300>;
 			sleep_filter_current = <100>;
-			power_off_thresd = <3400>;
+			power_off_thresd = <3500>;
 			zero_algorithm_vol = <3850>;
 			max_soc_offset = <60>;
 			monitor_sec = <5>;
@@ -879,8 +905,11 @@
 	status = "okay";
 };
 
-/* pwm4 is enabled per-device -- only the RG52 Mini uses it (chassis fan).
-* RG43H Pro has no fan, so we don't claim GPIO1_D1 there. */
+&pwm4 {
+	pinctrl-names = "active";
+	pinctrl-0 = <&pwm4m1_pins>;
+	status = "okay";
+};
 
 &pwm5 {
 	status = "okay";
