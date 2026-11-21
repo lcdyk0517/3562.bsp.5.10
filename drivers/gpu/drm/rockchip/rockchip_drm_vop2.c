@@ -3759,6 +3759,121 @@ module_param_cb(colortemp_r, &colortemp_gain_ops, &colortemp_gain[0], 0644);
 module_param_cb(colortemp_g, &colortemp_gain_ops, &colortemp_gain[1], 0644);
 module_param_cb(colortemp_b, &colortemp_gain_ops, &colortemp_gain[2], 0644);
 
+/*
+ * 面板 BCSH (brightness/contrast/saturation/hue), 由 VOP2 BCSH 模块实现:
+ *   参数 0..100, 50 为中性; 每次 atomic flush 由本驱动重新写入, 因此
+ *   游戏/Kodi 等重新 modeset 的自绘客户端也能保持同一设置。
+ * 用户接口: /sys/module/rockchipdrm/parameters/bcs_{brightness,contrast,saturation,hue}
+ * (面板输出为 RGB, r2y/y2r 常开, 与 TV 属性路径一致)
+ */
+#define PANEL_BCS_NEUTRAL	50
+
+static int panel_bcs[4] = { PANEL_BCS_NEUTRAL, PANEL_BCS_NEUTRAL,
+			    PANEL_BCS_NEUTRAL, PANEL_BCS_NEUTRAL };
+static struct vop2 *panel_bcs_vop2;
+
+static bool panel_bcs_active(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(panel_bcs); i++)
+		if (READ_ONCE(panel_bcs[i]) != PANEL_BCS_NEUTRAL)
+			return true;
+	return false;
+}
+
+/* caller holds vop2->reg_lock (or is the only writer during probe) */
+static void panel_bcs_write_vp(struct vop2 *vop2, struct vop2_video_port *vp)
+{
+	const struct vop2_video_port_data *vp_data = &vop2->data->vp[vp->id];
+	int brightness, contrast, saturation, hue, sin_hue, cos_hue;
+	int csc_mode;
+
+	if (!vp_data->regs->bcsh_en.mask)
+		return;
+
+	if (!panel_bcs_active()) {
+		VOP_MODULE_SET(vop2, vp, bcsh_en, 0);
+		return;
+	}
+
+	if (vp_data->feature & VOP_FEATURE_OUTPUT_10BIT)
+		brightness = interpolate(0, -128, 100, 127, READ_ONCE(panel_bcs[0]));
+	else
+		brightness = interpolate(0, -32, 100, 31, READ_ONCE(panel_bcs[0]));
+	contrast = interpolate(0, 0, 100, 511, READ_ONCE(panel_bcs[1]));
+	saturation = interpolate(0, 0, 100, 511, READ_ONCE(panel_bcs[2]));
+	hue = interpolate(0, -30, 100, 30, READ_ONCE(panel_bcs[3]));
+	sin_hue = fixp_sin32(hue) >> 23;
+	cos_hue = fixp_cos32(hue) >> 23;
+	csc_mode = vop2_convert_csc_mode(0, CSC_10BIT_DEPTH);
+
+	VOP_MODULE_SET(vop2, vp, bcsh_r2y_en, 1);
+	VOP_MODULE_SET(vop2, vp, bcsh_y2r_en, 1);
+	VOP_MODULE_SET(vop2, vp, bcsh_r2y_csc_mode, csc_mode);
+	VOP_MODULE_SET(vop2, vp, bcsh_y2r_csc_mode, csc_mode);
+	VOP_MODULE_SET(vop2, vp, bcsh_brightness, brightness);
+	VOP_MODULE_SET(vop2, vp, bcsh_contrast, contrast);
+	VOP_MODULE_SET(vop2, vp, bcsh_sat_con, saturation * contrast / 0x100);
+	VOP_MODULE_SET(vop2, vp, bcsh_sin_hue, sin_hue);
+	VOP_MODULE_SET(vop2, vp, bcsh_cos_hue, cos_hue);
+	VOP_MODULE_SET(vop2, vp, bcsh_out_mode, BCSH_OUT_MODE_NORMAL_VIDEO);
+	VOP_MODULE_SET(vop2, vp, bcsh_en, 1);
+}
+
+static void panel_bcs_work_fn(struct work_struct *work)
+{
+	struct vop2 *vop2 = READ_ONCE(panel_bcs_vop2);
+	struct drm_crtc *active[ROCKCHIP_MAX_CRTC] = { NULL };
+	unsigned long flags;
+	int i, n = 0;
+
+	if (!vop2 || !vop2->is_enabled)
+		return;
+
+	spin_lock_irqsave(&vop2->reg_lock, flags);
+	for (i = 0; i < vop2->data->nr_vps && n < ARRAY_SIZE(active); i++) {
+		struct vop2_video_port *vp = &vop2->vps[i];
+
+		if (!vp->rockchip_crtc.crtc.state ||
+		    !vp->rockchip_crtc.crtc.state->active)
+			continue;
+		panel_bcs_write_vp(vop2, vp);
+		active[n++] = &vp->rockchip_crtc.crtc;
+	}
+	spin_unlock_irqrestore(&vop2->reg_lock, flags);
+
+	for (i = 0; i < n; i++)
+		vop2_cfg_done(active[i]);
+}
+
+static DECLARE_WORK(panel_bcs_work, panel_bcs_work_fn);
+
+static int panel_bcs_param_set(const char *val, const struct kernel_param *kp)
+{
+	int k, ret;
+
+	ret = kstrtoint(val, 0, &k);
+	if (ret)
+		return ret;
+	if (k < 0 || k > 100)
+		return -EINVAL;
+
+	WRITE_ONCE(*(int *)kp->arg, k);
+	schedule_work(&panel_bcs_work);
+	return 0;
+}
+
+static const struct kernel_param_ops panel_bcs_param_ops = {
+	.set = panel_bcs_param_set,
+	.get = param_get_int,
+};
+
+module_param_cb(bcs_brightness, &panel_bcs_param_ops, &panel_bcs[0], 0644);
+module_param_cb(bcs_contrast, &panel_bcs_param_ops, &panel_bcs[1], 0644);
+module_param_cb(bcs_saturation, &panel_bcs_param_ops, &panel_bcs[2], 0644);
+module_param_cb(bcs_hue, &panel_bcs_param_ops, &panel_bcs[3], 0644);
+
 static void rockchip_vop2_crtc_fb_gamma_set(struct drm_crtc *crtc, u16 red,
 					    u16 green, u16 blue, int regno)
 {
@@ -10654,6 +10769,7 @@ static void vop2_cfg_update(struct drm_crtc *crtc,
 	}
 
 	vop2_tv_config_update(crtc, old_crtc_state);
+	panel_bcs_write_vp(vop2, vp);
 
 	if (vp_data->feature & VOP_FEATURE_OVERSCAN)
 		vop2_post_config(crtc);
@@ -12953,6 +13069,7 @@ static int vop2_bind(struct device *dev, struct device *master, void *data)
 
 	dev_set_drvdata(dev, vop2);
 	WRITE_ONCE(colortemp_vop2, vop2);
+	WRITE_ONCE(panel_bcs_vop2, vop2);
 
 	vop2->support_multi_area = of_property_read_bool(dev->of_node, "support-multi-area");
 	vop2->disable_afbc_win = of_property_read_bool(dev->of_node, "disable-afbc-win");
