@@ -238,11 +238,11 @@
 		interrupt-parent = <&gpio2>;
 		interrupts = <RK_PA1 IRQ_TYPE_EDGE_FALLING>;
 		pwms = <&pwm4 0 50000 0>;
-		/* dArkOS: 手动风扇 — 不挂 temp-trips (自动曲线会在阈值附近抖动,
-		* 风扇"转一下就停"). 控制走 hwmon sysfs:
-		*   echo 0-255 > /sys/class/hwmon/hwmonX/pwm1   (0=关)
-		* cooling-levels 只提供 pwm1 数值到百分比的换表. */
+		/* dArkOS: 默认手动 (hwmon pwm1); hwmon smart=1 时按 temp-trips
+		* 自动调速 (45/55/65C -> 100/200/255), 驱动内 5C 迟滞,
+		* 换档最小间隔 5s, 开机 5 分钟内不启第一档. */
 		cooling-levels = <0 50 100 150 200 255>;
+		rockchip,temp-trips = <45000 2 55000 4 65000 5>;
 	};
 	
 	rk817_sound: rk817-sound {

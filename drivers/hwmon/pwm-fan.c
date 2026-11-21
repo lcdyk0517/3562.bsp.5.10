@@ -19,9 +19,17 @@
 #include <linux/sysfs.h>
 #include <linux/thermal.h>
 #include <linux/timer.h>
+#include <linux/ktime.h>
+#include <linux/workqueue.h>
 #include <soc/rockchip/rockchip_system_monitor.h>
 
 #define MAX_PWM 255
+/* 智能档迟滞: 温度低于档位阈值 5C 才降档 (45/55/65 升, 40/50/60 降) */
+#define PWM_FAN_HYS	5000
+/* 智能档两次换档最小间隔 */
+#define PWM_FAN_SWITCH_MS	5000
+/* 开机 5 分钟内不启动第一档 (仅当前停转时) */
+#define PWM_FAN_BOOT_GRACE	300
 
 struct thermal_trips {
 	int temp;
@@ -48,6 +56,14 @@ struct pwm_fan_ctx {
 	struct notifier_block thermal_nb;
 	struct thermal_trips *thermal_trips;
 	bool thermal_notifier_is_ok;
+
+	bool smart;
+	struct thermal_zone_device *tz;
+	struct delayed_work smart_work;
+	ktime_t last_change;
+	/* protects smart / pwm_value / pwm_fan_state across notifier,
+	 * delayed work and sysfs paths */
+	struct mutex policy_lock;
 };
 
 /* This handler assumes self resetting edge triggered interrupt. */
@@ -122,12 +138,19 @@ static ssize_t pwm_store(struct device *dev, struct device_attribute *attr,
 	if (kstrtoul(buf, 10, &pwm) || pwm > MAX_PWM)
 		return -EINVAL;
 
-	ret = __set_pwm(ctx, pwm);
-	if (ret)
-		return ret;
+	/* 手动写 pwm1 即退出智能档, 避免内核策略覆盖用户设置 */
+	mutex_lock(&ctx->policy_lock);
+	ctx->smart = false;
+	mutex_unlock(&ctx->policy_lock);
+	cancel_delayed_work_sync(&ctx->smart_work);
 
-	pwm_fan_update_state(ctx, pwm);
-	return count;
+	mutex_lock(&ctx->policy_lock);
+	ret = __set_pwm(ctx, pwm);
+	if (!ret)
+		pwm_fan_update_state(ctx, pwm);
+	mutex_unlock(&ctx->policy_lock);
+
+	return ret ? ret : count;
 }
 
 static ssize_t pwm_show(struct device *dev, struct device_attribute *attr,
@@ -146,12 +169,19 @@ static ssize_t rpm_show(struct device *dev,
 	return sprintf(buf, "%u\n", ctx->rpm);
 }
 
+static ssize_t smart_show(struct device *dev, struct device_attribute *attr,
+			  char *buf);
+static ssize_t smart_store(struct device *dev, struct device_attribute *attr,
+			   const char *buf, size_t count);
+
 static SENSOR_DEVICE_ATTR_RW(pwm1, pwm, 0);
 static SENSOR_DEVICE_ATTR_RO(fan1_input, rpm, 0);
+static SENSOR_DEVICE_ATTR_RW(smart, smart, 0);
 
 static struct attribute *pwm_fan_attrs[] = {
 	&sensor_dev_attr_pwm1.dev_attr.attr,
 	&sensor_dev_attr_fan1_input.dev_attr.attr,
+	&sensor_dev_attr_smart.dev_attr.attr,
 	NULL,
 };
 
@@ -328,14 +358,112 @@ static int pwm_fan_get_thermal_trips(struct device *dev, char *porp_name,
 static int pwm_fan_temp_to_state(struct pwm_fan_ctx *ctx, int temp)
 {
 	struct thermal_trips *trips = ctx->thermal_trips;
-	int i, state = 0;
+	int i, state = 0, cur = -1, cur_trip = -1;
 
 	for (i = 0; trips[i].state != INT_MAX; i++) {
 		if (temp >= trips[i].temp)
 			state = trips[i].state;
+		if (ctx->pwm_fan_cooling_levels[trips[i].state] == ctx->pwm_value) {
+			cur = trips[i].state;
+			cur_trip = trips[i].temp;
+		}
 	}
 
+	/* 降档迟滞: 没低于当前档位阈值 5C 就保持, 避免阈值附近抖动 */
+	if (cur > state && cur_trip >= 0 && temp >= cur_trip - PWM_FAN_HYS)
+		state = cur;
+
 	return state;
+}
+
+/* caller holds ctx->policy_lock */
+static int pwm_fan_smart_apply(struct pwm_fan_ctx *ctx, int temp)
+{
+	unsigned int state, level;
+	int ret;
+
+	if (!ctx->smart)
+		return 0;
+	if (!ctx->thermal_trips)
+		return -EOPNOTSUPP;
+	if (temp < 0)
+		return -EINVAL;
+
+	state = pwm_fan_temp_to_state(ctx, temp);
+	if (state > ctx->pwm_fan_max_state)
+		state = ctx->pwm_fan_max_state;
+
+	/* 开机 5 分钟内不启动第一档, 当前已停转时才钳制; 二/三档照常 */
+	if (state == 2 && ctx->pwm_value == 0 &&
+	    ktime_get_boottime_seconds() < PWM_FAN_BOOT_GRACE)
+		state = 0;
+
+	level = ctx->pwm_fan_cooling_levels[state];
+	if (level == ctx->pwm_value) {
+		ctx->pwm_fan_state = state;
+		return 0;
+	}
+
+	/* 换档最小间隔 5s (notifier 和 2s 复检共用) */
+	if (ctx->last_change &&
+	    ktime_ms_delta(ktime_get(), ctx->last_change) < PWM_FAN_SWITCH_MS)
+		return 0;
+
+	ret = __set_pwm(ctx, level);
+	if (!ret) {
+		ctx->pwm_fan_state = state;
+		ctx->last_change = ktime_get();
+	}
+
+	return ret;
+}
+
+static int pwm_fan_read_temp(struct pwm_fan_ctx *ctx)
+{
+	int temp;
+
+	if (!ctx->tz) {
+		ctx->tz = thermal_zone_get_zone_by_name("soc-thermal");
+		if (IS_ERR_OR_NULL(ctx->tz)) {
+			ctx->tz = NULL;
+			return -ENODEV;
+		}
+	}
+	if (thermal_zone_get_temp(ctx->tz, &temp))
+		return -EINVAL;
+
+	return temp;
+}
+
+static void pwm_fan_smart_work_fn(struct work_struct *work)
+{
+	struct pwm_fan_ctx *ctx = container_of(work, struct pwm_fan_ctx,
+					       smart_work.work);
+	bool reschedule;
+	int temp;
+
+	mutex_lock(&ctx->policy_lock);
+	reschedule = ctx->smart;
+	if (reschedule) {
+		temp = pwm_fan_read_temp(ctx);
+		if (temp >= 0)
+			pwm_fan_smart_apply(ctx, temp);
+		reschedule = ctx->smart;
+	}
+	mutex_unlock(&ctx->policy_lock);
+
+	if (reschedule)
+		schedule_delayed_work(&ctx->smart_work, 2 * HZ);
+}
+
+static void pwm_fan_smart_cancel(void *data)
+{
+	struct pwm_fan_ctx *ctx = data;
+
+	mutex_lock(&ctx->policy_lock);
+	ctx->smart = false;
+	mutex_unlock(&ctx->policy_lock);
+	cancel_delayed_work_sync(&ctx->smart_work);
 }
 
 static int pwm_fan_thermal_notifier_call(struct notifier_block *nb,
@@ -343,24 +471,72 @@ static int pwm_fan_thermal_notifier_call(struct notifier_block *nb,
 {
 	struct pwm_fan_ctx *ctx = container_of(nb, struct pwm_fan_ctx, thermal_nb);
 	struct system_monitor_event_data *event_data = data;
-	int state, ret;
+	int ret;
 
 	if (event != SYSTEM_MONITOR_CHANGE_TEMP)
 		return NOTIFY_OK;
 
-	state = pwm_fan_temp_to_state(ctx, event_data->temp);
-	if (state > ctx->pwm_fan_max_state)
-		return NOTIFY_BAD;
-	if (state == ctx->pwm_fan_state)
-		return NOTIFY_OK;
+	mutex_lock(&ctx->policy_lock);
+	ret = pwm_fan_smart_apply(ctx, event_data->temp);
+	mutex_unlock(&ctx->policy_lock);
 
-	ret = __set_pwm(ctx, ctx->pwm_fan_cooling_levels[state]);
+	return ret ? NOTIFY_BAD : NOTIFY_OK;
+}
+
+static ssize_t smart_store(struct device *dev, struct device_attribute *attr,
+			   const char *buf, size_t count)
+{
+	struct pwm_fan_ctx *ctx = dev_get_drvdata(dev);
+	bool on;
+	int temp, ret;
+
+	ret = kstrtobool(buf, &on);
 	if (ret)
-		return NOTIFY_BAD;
+		return ret;
 
-	ctx->pwm_fan_state = state;
+	if (!on) {
+		mutex_lock(&ctx->policy_lock);
+		ctx->smart = false;
+		mutex_unlock(&ctx->policy_lock);
+		cancel_delayed_work_sync(&ctx->smart_work);
+		return count;
+	}
 
-	return NOTIFY_OK;
+	if (!ctx->thermal_trips)
+		return -EOPNOTSUPP;
+
+	temp = pwm_fan_read_temp(ctx);
+	if (temp < 0)
+		return temp;
+
+	mutex_lock(&ctx->policy_lock);
+	ctx->smart = true;
+	ctx->last_change = 0;
+	ret = pwm_fan_smart_apply(ctx, temp);
+	mutex_unlock(&ctx->policy_lock);
+
+	if (ret) {
+		mutex_lock(&ctx->policy_lock);
+		ctx->smart = false;
+		mutex_unlock(&ctx->policy_lock);
+		return ret;
+	}
+
+	schedule_delayed_work(&ctx->smart_work, 2 * HZ);
+	return count;
+}
+
+static ssize_t smart_show(struct device *dev, struct device_attribute *attr,
+			  char *buf)
+{
+	struct pwm_fan_ctx *ctx = dev_get_drvdata(dev);
+	bool on;
+
+	mutex_lock(&ctx->policy_lock);
+	on = ctx->smart;
+	mutex_unlock(&ctx->policy_lock);
+
+	return sprintf(buf, "%d\n", on ? 1 : 0);
 }
 
 static int pwm_fan_register_thermal_notifier(struct device *dev,
@@ -390,6 +566,7 @@ static int pwm_fan_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mutex_init(&ctx->lock);
+	mutex_init(&ctx->policy_lock);
 
 	ctx->pwm = devm_of_pwm_get(dev, dev->of_node, NULL);
 	if (IS_ERR(ctx->pwm))
@@ -451,6 +628,10 @@ static int pwm_fan_probe(struct platform_device *pdev)
 			return ret;
 	}
 	timer_setup(&ctx->rpm_timer, sample_timer, 0);
+	INIT_DELAYED_WORK(&ctx->smart_work, pwm_fan_smart_work_fn);
+	ret = devm_add_action_or_reset(dev, pwm_fan_smart_cancel, ctx);
+	if (ret)
+		return ret;
 	ret = devm_add_action_or_reset(dev, pwm_fan_pwm_disable, ctx);
 	if (ret)
 		return ret;
