@@ -9,6 +9,7 @@
 #include <linux/usb.h>
 #include <linux/kthread.h>
 #include <linux/vmalloc.h>
+#include <linux/delay.h>
 #include "aicwf_txrxif.h"
 #include "aicwf_usb.h"
 #include "rwnx_tx.h"
@@ -2569,6 +2570,74 @@ static void aicwf_usb_disconnect(struct usb_interface *intf)
 	atomic_set(&aicwf_deinit_atomic, 1);
 }
 
+/*
+ * Deep sleep removes power from the USB WiFi module, so the firmware that
+ * probe() downloaded into the AIC8800DC's RAM is gone on wake. Restarting the
+ * URBs (what .resume used to do) leaves a chip that never answers again:
+ * scans return busy and wlan0 stays up without traffic until the module is
+ * reloaded by hand. Nothing re-runs probe() because the device is still
+ * enumerated, so do it from here once the system is back: release the driver
+ * and let it bind again, which is exactly the unbind/bind that used to be
+ * needed manually.
+ */
+static atomic_t aicwf_rebind_pending = ATOMIC_INIT(0);
+
+struct aicwf_usb_rebind {
+    struct delayed_work work;
+    struct usb_interface *intf;
+};
+
+static void aicwf_usb_rebind_work(struct work_struct *work)
+{
+    struct aicwf_usb_rebind *rb = container_of(to_delayed_work(work),
+                                               struct aicwf_usb_rebind, work);
+    struct usb_interface *intf = rb->intf;
+    struct usb_device *udev = interface_to_usbdev(intf);
+    struct device *dev = &intf->dev;
+    int ret = 0, i;
+
+    dev_info(dev, "resume: WiFi firmware lost in suspend, rebinding\n");
+    if (dev->driver)
+        device_release_driver(dev);
+
+    for (i = 0; i < 3; i++) {
+        msleep(500);
+        ret = device_attach(dev);
+        if (ret == 1)
+            break;
+        dev_warn(dev, "rebind attempt %d failed (%d)\n", i + 1, ret);
+        /* The chip may be wedged; a port reset puts it back to bootrom. */
+        usb_reset_device(udev);
+    }
+    if (ret == 1)
+        dev_info(dev, "resume: WiFi chip re-initialized\n");
+    else
+        dev_err(dev, "resume: WiFi chip did not come back\n");
+
+    usb_put_dev(udev);
+    usb_put_intf(intf);
+    kfree(rb);
+    atomic_set(&aicwf_rebind_pending, 0);
+}
+
+static void aicwf_usb_schedule_rebind(struct usb_interface *intf)
+{
+    struct aicwf_usb_rebind *rb;
+
+    if (atomic_cmpxchg(&aicwf_rebind_pending, 0, 1))
+        return;
+
+    rb = kzalloc(sizeof(*rb), GFP_ATOMIC);
+    if (!rb) {
+        atomic_set(&aicwf_rebind_pending, 0);
+        return;
+    }
+    INIT_DELAYED_WORK(&rb->work, aicwf_usb_rebind_work);
+    rb->intf = usb_get_intf(intf);
+    usb_get_dev(interface_to_usbdev(intf));
+    schedule_delayed_work(&rb->work, msecs_to_jiffies(1000));
+}
+
 static int aicwf_usb_suspend(struct usb_interface *intf, pm_message_t state)
 {
     struct aic_usb_dev *usb_dev =
@@ -2618,6 +2687,10 @@ static int aicwf_usb_resume(struct usb_interface *intf)
             netif_tx_wake_all_queues(rwnx_vif->ndev);
         }
     }
+
+    /* Runtime PM is off for this module, so reaching here means the system
+       is coming back from suspend and the chip has to be re-initialized. */
+    aicwf_usb_schedule_rebind(intf);
      return 0;
 }
 

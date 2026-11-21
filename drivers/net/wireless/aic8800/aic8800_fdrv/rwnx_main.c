@@ -545,7 +545,10 @@ static const int rwnx_hwq2uapsd[NL80211_NUM_ACS] = {
 struct semaphore aicwf_deinit_sem;
 atomic_t aicwf_deinit_atomic;
 
-int aicwf_dbg_level = LOGERROR|LOGINFO;
+/* LOGINFO fills dmesg with hundreds of lines on every (re)probe, e.g. after
+   each suspend/resume; keep errors only, raise at runtime via the sysfs
+   parameter for debugging. */
+int aicwf_dbg_level = LOGERROR;
 module_param(aicwf_dbg_level, int, 0660);
 #ifdef CONFIG_DYNAMIC_PWR
 int dynamic_pwr = 1;
@@ -2327,7 +2330,7 @@ static struct wireless_dev *rwnx_virtual_interface_add(struct rwnx_hw *rwnx_hw,
 
     memcpy(vif->wdev.address, rwnx_hw->wiphy->perm_addr, ETH_ALEN);
     vif->wdev.address[5] ^= vif_idx;
-    AICWFDBG(LOGERROR, "p2p dev addr=%x %x %x %x %x %x\n", vif->wdev.address[0], vif->wdev.address[1], \
+    AICWFDBG(LOGDEBUG, "p2p dev addr=%x %x %x %x %x %x\n", vif->wdev.address[0], vif->wdev.address[1], \
         vif->wdev.address[2], vif->wdev.address[3], vif->wdev.address[4], vif->wdev.address[5]);
 
     return wdev;

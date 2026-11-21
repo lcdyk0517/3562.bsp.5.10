@@ -3618,41 +3618,29 @@ static void colortemp_gains(u32 *gr, u32 *gg, u32 *gb)
 	int n = ARRAY_SIZE(colortemp_table);
 	int i;
 
-	if (k <= 0) {	/* 0 = 关闭色温, 只保留用户 gamma */
-		*gr = colortemp_gain[0];
-		*gg = colortemp_gain[1];
-		*gb = colortemp_gain[2];
-		return;
-	}
+	if (k <= 0) {	/* 0 = 关闭色温, 基准增益为 1 */
+		*gr = 1000;
+		*gg = 1000;
+		*gb = 1000;
+	} else if (k <= colortemp_table[0].kelvin) {
+		*gr = colortemp_table[0].gain[0];
+		*gg = colortemp_table[0].gain[1];
+		*gb = colortemp_table[0].gain[2];
+	} else if (k >= colortemp_table[n - 1].kelvin) {
+		*gr = colortemp_table[n - 1].gain[0];
+		*gg = colortemp_table[n - 1].gain[1];
+		*gb = colortemp_table[n - 1].gain[2];
+	} else {
+		u32 lo, hi, f;
+		int c;
 
-	if (k <= colortemp_table[0].kelvin)
-		i = 0;
-	else if (k >= colortemp_table[n - 1].kelvin)
-		i = n - 2;
-	else
 		for (i = 0; i < n - 2; i++)
 			if (k < colortemp_table[i + 1].kelvin)
 				break;
 
-	if (k <= colortemp_table[0].kelvin) {
-		*gr = colortemp_table[0].gain[0];
-		*gg = colortemp_table[0].gain[1];
-		*gb = colortemp_table[0].gain[2];
-		return;
-	}
-	if (k >= colortemp_table[n - 1].kelvin) {
-		*gr = colortemp_table[n - 1].gain[0];
-		*gg = colortemp_table[n - 1].gain[1];
-		*gb = colortemp_table[n - 1].gain[2];
-		return;
-	}
-
-	{
-		u32 lo = colortemp_table[i].kelvin;
-		u32 hi = colortemp_table[i + 1].kelvin;
-		u32 f = (u32)(((k - lo) * 1000) / (hi - lo));
-		int c;
-
+		lo = colortemp_table[i].kelvin;
+		hi = colortemp_table[i + 1].kelvin;
+		f = (u32)(((k - lo) * 1000) / (hi - lo));
 		for (c = 0; c < 3; c++) {
 			u32 a = colortemp_table[i].gain[c];
 			u32 b = colortemp_table[i + 1].gain[c];
@@ -3683,6 +3671,12 @@ static void colortemp_fill_lut(struct vop2_video_port *vp)
 		u32 r = (u32)((u64)i * gr / 1000);
 		u32 g = (u32)((u64)i * gg / 1000);
 		u32 b = (u32)((u64)i * gb / 1000);
+
+		/* 每个通道只有 10 bit: gamma>1 时不钳位会溢出到相邻通道,
+		 * 表现就是调高 gamma 后严重偏色 */
+		if (r > len - 1) r = len - 1;
+		if (g > len - 1) g = len - 1;
+		if (b > len - 1) b = len - 1;
 
 		vp->lut[i] = b * len * len + g * len + r;
 	}

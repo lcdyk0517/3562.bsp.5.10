@@ -2614,7 +2614,7 @@ int aicwf_patch_table_load(struct rwnx_hw *rwnx_hw, char *filename)
 
     if (!err && (i < size)) {
         for (i =(128/4); i < (size/4); i +=2) {
-            AICWFDBG(LOGERROR, "patch_tbl:  %x  %x\n", dst[i], dst[i+1]);
+            AICWFDBG(LOGDEBUG, "patch_tbl:  %x  %x\n", dst[i], dst[i+1]);
             err = rwnx_send_dbg_mem_write_req(rwnx_hw, dst[i], dst[i+1]);
         }
         if (err) {
@@ -3075,7 +3075,7 @@ int aicwf_misc_ram_valid_check_8800dc(struct rwnx_hw *rwnx_hw, int *valid_out)
         return ret;
     }
     misc_ram_addr = cfm.memdata;
-    AICWFDBG(LOGERROR, "misc_ram_addr=%x\n", misc_ram_addr);
+    AICWFDBG(LOGDEBUG, "misc_ram_addr=%x\n", misc_ram_addr);
     // bit_mask
     ram_base_addr = misc_ram_addr + offsetof(rf_misc_ram_t, bit_mask);
     ram_word_cnt = (MEMBER_SIZE(rf_misc_ram_t, bit_mask) + MEMBER_SIZE(rf_misc_ram_t, reserved)) / 4;
@@ -3135,7 +3135,7 @@ int aicwf_misc_ram_init_8800dc(struct rwnx_hw *rwnx_hw)
         return ret;
     }
     misc_ram_addr = cfm.memdata;
-    AICWFDBG(LOGERROR, "misc_ram_addr=%x\n", misc_ram_addr);
+    AICWFDBG(LOGDEBUG, "misc_ram_addr=%x\n", misc_ram_addr);
     for (i = 0; i < (misc_ram_size / 4); i++) {
         ret = rwnx_send_dbg_mem_write_req(rwnx_hw, misc_ram_addr + i * 4, 0);
         if (ret) {

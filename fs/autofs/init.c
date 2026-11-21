@@ -45,3 +45,4 @@ module_init(init_autofs_fs)
 module_exit(exit_autofs_fs)
 MODULE_LICENSE("GPL");
 MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
+MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
